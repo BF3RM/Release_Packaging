@@ -235,11 +235,10 @@ jobs:
         "@
         Set-Content -Path "Startup.txt" -Value $startupContent
 
-    # --- 8. PACKAGE & RELEASE ---
+    # --- 8. PACKAGE & RELEASE (Standard Version) ---
     - name: Create Zip Packages
       run: |
         # Optimization: Use 7zip (faster than Compress-Archive)
-        # We change directory to avoid including parent folders in zip structure
         
         pushd Build
         7z a -tzip ..\Reality-Server-Full.zip * -r
@@ -271,10 +270,36 @@ jobs:
           ### 🔧 Bundler Changelog
           ${{ steps.tag_version.outputs.changelog }}
 
-    # --- 9. UPDATE LATEST TAG (Add tag to same commit) ---
-    - name: Update 'latest' Tag
+    # --- 9. PUBLISH LATEST RELEASE (Rolling Release) ---
+    - name: Publish 'latest' Release
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
+        $notes = @"
+        Automated Release ${{ steps.tag_version.outputs.new_tag }}
+          
+        ### 📦 Component Status
+        | Component | Status | Last 3 Commits |
+        | :--- | :--- | :--- |
+        | **RealityMod** | $env:RM_STATUS | $env:RM_LOG |
+        | **LevelLoader** | $env:LL_STATUS | $env:LL_LOG |
+        | **BlueprintManager** | (Included) | $env:BP_LOG |
+        | **VEManager** | (Included) | $env:VE_LOG |
+
+        ### 🔧 Bundler Changelog
+        ${{ steps.tag_version.outputs.changelog }}
+        "@
+        Set-Content -Path release_notes.md -Value $notes
+
+    
+        gh release delete latest --yes || echo "No previous release found"
+
         git config user.name "GitHub Actions"
         git config user.email "actions@github.com"
         git tag -f latest
         git push -f origin latest
+
+        gh release create latest `
+          --title "Latest Build (${{ steps.tag_version.outputs.new_tag }})" `
+          --notes-file release_notes.md `
+          Reality-Server-Full.zip Reality-Mods-Only.zip
