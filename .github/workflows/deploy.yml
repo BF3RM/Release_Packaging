@@ -216,7 +216,7 @@ jobs:
         vars.teamKillValueDecreasePerSecond 0.01
         vars.teamKillKickForBan 0
         RM.setDevelopers "names" "space" "seperated" 
-        RM.setAdmins "[ENTE]VileEnd" "Admin2"
+        RM.setAdmins "Admin1" "Admin2"
         RM.setLightAdmins "LightAdmin1" "LightAdmin2"
         RM.serverInfo "Sample RM Server Info"
         RM.serverLicenseKey $env:LIC_KEY
@@ -262,7 +262,7 @@ jobs:
           ### 🔧 Bundler Changelog
           ${{ steps.tag_version.outputs.changelog }}
 
-    # --- 9. UPDATE LATEST TAG (Add tag to same commit) ---
+    # --- 9. UPDATE LATEST TAG ---
     - name: Update 'latest' Tag
       run: |
         git config user.name "GitHub Actions"
