@@ -2,7 +2,7 @@ name: Build BF3 Reality Mod Server
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "master" ]
   workflow_dispatch:
 
 jobs:
@@ -17,8 +17,6 @@ jobs:
       run: |
         New-Item -ItemType Directory -Force -Path "Build\Admin\Mods"
 
-    # --- 1. CLONE REPOS (Private) ---
-    # We clone first so the pnpm-lock.yaml exists for the next caching step
     - name: Clone RealityMod & Mods
       working-directory: Build/Admin/Mods
       env:
@@ -31,19 +29,18 @@ jobs:
         git clone https://oauth2:$env:GH_TOKEN@github.com/BF3RM/BlueprintManager.git
         git clone https://oauth2:$env:GH_TOKEN@github.com/BF3RM/VEManager.git
 
-    # --- 2. SETUP NODE & CACHE ---
+    - name: Install pnpm
+      uses: pnpm/action-setup@v2
+      with:
+        version: 9
+
     - name: Setup Node.js with Caching
       uses: actions/setup-node@v4
       with:
         node-version: '20'
         cache: 'pnpm'
-        # Important: Point to the lockfile inside the cloned repo
         cache-dependency-path: 'Build/Admin/Mods/RealityMod/WebUI/pnpm-lock.yaml'
 
-    - name: Install PNPM
-      run: npm install -g pnpm
-
-    # --- 3. BUILD WEBUI ---
     - name: Install & Inject Vextpack & Build
       working-directory: Build/Admin/Mods/RealityMod/WebUI
       run: |
@@ -55,8 +52,12 @@ jobs:
         $Source = "${{ github.workspace }}\vextpack"
         $Dest = "node_modules\vextpack"
         
-        Write-Host "Copying vextpack from $Source to $Dest"
-        Copy-Item -Path $Source -Destination $Dest -Recurse -Force
+        if (Test-Path $Source) {
+            Write-Host "Copying vextpack from $Source to $Dest"
+            Copy-Item -Path $Source -Destination $Dest -Recurse -Force
+        } else {
+            Write-Warning "vextpack folder not found at root! Skipping injection."
+        }
 
         # 3. Build
         pnpm build
@@ -64,7 +65,7 @@ jobs:
         # Validation
         if (-not (Test-Path "ui.vuic")) { Write-Error "ui.vuic was not created!" }
 
-    # --- 4. RM LEVEL LOADER GEN ---
+    # --- 5. RM LEVEL LOADER GEN ---
     - name: Run RMLevelLoaderGen
       working-directory: ${{ github.workspace }}
       env:
@@ -81,7 +82,7 @@ jobs:
              Write-Error "Could not find generated rm-levelloader folder."
         }
 
-    # --- 5. CONFIGURATION FILES ---
+    # --- 6. CONFIGURATION FILES ---
     - name: Generate Config Files
       working-directory: Build/Admin
       env:
@@ -150,7 +151,7 @@ jobs:
         "@
         Set-Content -Path "Startup.txt" -Value $startupContent
 
-    # --- 6. FINALIZE ---
+    # --- 7. FINALIZE ---
     - name: Upload Server Artifact
       uses: actions/upload-artifact@v4
       with:
