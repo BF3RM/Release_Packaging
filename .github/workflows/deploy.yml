@@ -170,8 +170,8 @@ jobs:
     # --- PACKAGE ZIPS ---
     - name: Create Zip Packages
       run: |
-        Compress-Archive -Path Build\* -DestinationPath BF3-Server-Full.zip
-        Compress-Archive -Path Build\Admin\Mods\* -DestinationPath BF3-Mods-Only.zip
+        Compress-Archive -Path Build\* -DestinationPath realityMod_Full_Setup.zip
+        Compress-Archive -Path Build\Admin\Mods\* -DestinationPath realityMod_Mods_Only.zip
 
     # --- CREATE RELEASE ---
     - name: Create Release
