@@ -47,20 +47,13 @@ jobs:
         $Dest = "node_modules\vextpack"
         
         if (Test-Path $Source) {
-            Write-Host "Injecting vextpack from $Source to $Dest"
             Copy-Item -Path $Source -Destination $Dest -Recurse -Force
-        } else {
-            Write-Warning "vextpack folder not found at root! Skipping injection."
         }
 
         pnpm build
         
-        if (Test-Path "..\ui.vuic") {
-            Write-Host "SUCCESS: ui.vuic found in RealityMod root."
-        } else {
+        if (-not (Test-Path "..\ui.vuic")) {
             Write-Error "FAILURE: ui.vuic was not found in ../ui.vuic!"
-            # Debugging: List files in parent dir to see what happened
-            Get-ChildItem -Path ".." | Select-Object Name
             exit 1
         }
 
@@ -71,12 +64,22 @@ jobs:
       run: |
         git clone https://oauth2:$env:GH_TOKEN@github.com/BF3RM/RMLevelLoaderGen.git temp_loader
         cd temp_loader
-        .\generate.bat
         
-        if (Test-Path "mods\rm-levelloader") {
-            Move-Item -Path "mods\rm-levelloader" -Destination "..\Build\Admin\Mods\rm-levelloader"
+        (Get-Content generate.bat) -replace 'pause', 'REM pause' | Set-Content generate.bat
+        
+        cmd /c "echo. | generate.bat"
+
+        $LocalPath = "mods\rm-levelloader"
+        $DocPath = "$env:USERPROFILE\Documents\Battlefield 3\Server\Admin\Mods\RMLevelLoaderGen\mods\rm-levelloader"
+        $Dest = "..\Build\Admin\Mods\rm-levelloader"
+
+        if (Test-Path $LocalPath) {
+            Move-Item -Path $LocalPath -Destination $Dest -Force
+        } elseif (Test-Path $DocPath) {
+            Move-Item -Path $DocPath -Destination $Dest -Force
         } else {
              Write-Error "Could not find generated rm-levelloader folder."
+             exit 1
         }
 
     - name: Generate Config Files
@@ -107,9 +110,7 @@ jobs:
         $startupContent = @"
         # RM Server Startup.txt Example
 
-        # RCON Password
         admin.password "$env:RCON_PW"
-        # Game Password
         vars.gamePassword "password"
 
         # Server
