@@ -1,25 +1,40 @@
-name: Build BF3 Reality Mod Server
+name: Auto Build & Release
 
 on:
   push:
     branches: [ "main", "master" ]
+    # We REMOVED the 'tags' trigger. Now it triggers on every push to master.
   workflow_dispatch:
 
+permissions:
+  contents: write # Essential for creating tags and releases
+
 jobs:
-  build:
+  auto-release:
     runs-on: windows-latest
     
     steps:
     - name: Checkout Main Repo
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0 # Required to calculate version history
+
+    # --- 1. CALCULATE NEXT VERSION ---
+    - name: Bump Version and Push Tag
+      id: tag_version
+      uses: mathieudutour/github-tag-action@v6.1
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        default_bump: patch  # 'patch' (v1.0.1), 'minor' (v1.1.0), or 'major' (v2.0.0)
+        release_branches: main,master
 
     # --- SETUP ENVIRONMENTS ---
-    - name: Setup Dotnet (For compiling the C# tool)
+    - name: Setup Dotnet
       uses: actions/setup-dotnet@v3
       with:
         dotnet-version: '6.0.x'
 
-    - name: Setup Python (In case the tool relies on Python scripts)
+    - name: Setup Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.10' 
@@ -29,7 +44,7 @@ jobs:
         New-Item -ItemType Directory -Force -Path "Build\Admin\Mods"
         New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\Documents\Battlefield 3\Server\Admin\Mods"
 
-    # --- 1. CLONE REALITYMOD & MODS ---
+    # --- CLONE REPOS ---
     - name: Clone RealityMod & Mods
       working-directory: Build/Admin/Mods
       env:
@@ -39,13 +54,12 @@ jobs:
         git clone https://oauth2:$env:GH_TOKEN@github.com/BF3RM/BlueprintManager.git
         git clone https://oauth2:$env:GH_TOKEN@github.com/BF3RM/VEManager.git
 
-    # --- 2. INSTALL PNPM ---
+    # --- SETUP NODE & PNPM ---
     - name: Install pnpm
       uses: pnpm/action-setup@v2
       with:
         version: 9
 
-    # --- 3. SETUP NODE & CACHE ---
     - name: Setup Node.js with Caching
       uses: actions/setup-node@v4
       with:
@@ -53,69 +67,49 @@ jobs:
         cache: 'pnpm'
         cache-dependency-path: 'Build/Admin/Mods/RealityMod/WebUI/pnpm-lock.yaml'
 
-    # --- 4. BUILD WEBUI ---
-    - name: Install & Inject Vextpack & Build
+    # --- BUILD WEBUI ---
+    - name: Build WebUI (Inject Vextpack)
       working-directory: Build/Admin/Mods/RealityMod/WebUI
       run: |
         pnpm install
-
         $Source = "${{ github.workspace }}\vextpack"
         $Dest = "node_modules\vextpack"
-        
-        if (Test-Path $Source) {
-            Copy-Item -Path $Source -Destination $Dest -Recurse -Force
-        }
-
+        if (Test-Path $Source) { Copy-Item -Path $Source -Destination $Dest -Recurse -Force }
         pnpm build
-        
-        if (-not (Test-Path "..\ui.vuic")) {
-            Write-Error "FAILURE: ui.vuic was not found in RealityMod root!"
-            exit 1
-        }
+        if (-not (Test-Path "..\ui.vuic")) { Write-Error "FAILURE: ui.vuic missing"; exit 1 }
 
-    # --- 5. RM LEVEL LOADER GEN ---
+    # --- RM LEVEL LOADER GEN ---
     - name: Run RMLevelLoaderGen
       working-directory: ${{ github.workspace }}
       env:
         GH_TOKEN: ${{ secrets.GH_PAT }}
       run: |
-        # 1. Clone Recursively
         git clone --recurse-submodules https://oauth2:$env:GH_TOKEN@github.com/BF3RM/RMLevelLoaderGen.git temp_loader
         cd temp_loader
         
-        # 2. BUILD THE TOOL (C#)
-        # Even if Python is needed later, the entry point seems to be a C# binary in /bin
-        Write-Host "--- Building LevelLoaderGen ---"
+        # Build Tool
         dotnet build .\LevelLoaderGen\LevelLoaderGen.csproj -c Release -o .\LevelLoaderGen\bin
         
-        # 3. PATCH generate.bat
-        # Remove 'pause', fix slashes
+        # Patch Bat
         $content = Get-Content generate.bat -Raw
         $content = $content -replace 'pause', 'REM pause'
         $content = $content -replace '/', '\' 
         Set-Content -Path generate.bat -Value $content
 
-        # 4. EXECUTE generate.bat
-        # We run this in a cmd shell to ensure standard Windows behavior
-        Write-Host "--- Executing generate.bat ---"
+        # Run
         cmd /c generate.bat
 
-        # 5. FIND AND MOVE OUTPUT
+        # Move Output
         $Dest = "..\Build\Admin\Mods\rm-levelloader"
-        
         if (Test-Path "mods\rm-levelloader") {
-            Write-Host "Found output in local mods folder."
             Move-Item -Path "mods\rm-levelloader" -Destination $Dest -Force
         } elseif (Test-Path "$env:USERPROFILE\Documents\Battlefield 3\Server\Admin\Mods\RMLevelLoaderGen\mods\rm-levelloader") {
-             Write-Host "Found output in Documents folder."
              Move-Item -Path "$env:USERPROFILE\Documents\Battlefield 3\Server\Admin\Mods\RMLevelLoaderGen\mods\rm-levelloader" -Destination $Dest -Force
         } else {
-             Write-Error "FATAL: Could not find generated 'mods\rm-levelloader' folder."
-             Get-ChildItem -Recurse
-             exit 1
+             Write-Error "FATAL: Output missing"; exit 1
         }
 
-    # --- 6. CONFIG FILES ---
+    # --- CONFIG FILES ---
     - name: Generate Config Files
       working-directory: Build/Admin
       env:
@@ -143,21 +137,17 @@ jobs:
 
         $startupContent = @"
         # RM Server Startup.txt Example
-
         admin.password "$env:RCON_PW"
         vars.gamePassword "password"
-
         vars.serverName "<Server Name>"
         vars.maxPlayers 80
         vu.serverbanner https://i.imgur.com/B4bCwpq.jpg 
         vars.idleTimeout 9999
-
         vars.teamKillCountForKick 0
         vars.teamKillValueForKick 2
         vars.teamKillValueIncrease 0.525
         vars.teamKillValueDecreasePerSecond 0.01
         vars.teamKillKickForBan 0
-
         RM.setDevelopers "names" "space" "seperated" 
         RM.setAdmins "[ENTE]VileEnd" "Admin2"
         RM.setLightAdmins "LightAdmin1" "LightAdmin2"
@@ -172,15 +162,25 @@ jobs:
         RM.tempReservedSlotsRejoinTime 60.0
         RM.defaultPreRoundTime 180
         RM.setAutoBalancer false
-
         reservedSlotsList.add "PlayerName1"
         reservedSlotsList.add "PlayerName2"
         "@
         Set-Content -Path "Startup.txt" -Value $startupContent
 
-    # --- 7. FINALIZE ---
-    - name: Upload Server Artifact
-      uses: actions/upload-artifact@v4
+    # --- PACKAGE ZIPS ---
+    - name: Create Zip Packages
+      run: |
+        Compress-Archive -Path Build\* -DestinationPath BF3-Server-Full.zip
+        Compress-Archive -Path Build\Admin\Mods\* -DestinationPath BF3-Mods-Only.zip
+
+    # --- CREATE RELEASE ---
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
       with:
-        name: BF3-Server-Files
-        path: Build/
+        # Uses the tag generated by step 1 (e.g., v1.0.1)
+        tag_name: ${{ steps.tag_version.outputs.new_tag }}
+        name: Release ${{ steps.tag_version.outputs.new_tag }}
+        body: "Automated release triggered by push to master."
+        files: |
+          realityMod_Full_Setup.zip
+          realityMod_Mods_Only.zip
