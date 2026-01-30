@@ -27,7 +27,6 @@ jobs:
         default_bump: patch
         release_branches: main,master
 
-    # --- 2. SETUP ENVIRONMENT ---
     - name: Setup Python
       uses: actions/setup-python@v5
       with:
@@ -38,15 +37,32 @@ jobs:
         New-Item -ItemType Directory -Force -Path "Build\Admin\Mods"
         New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\Documents\Battlefield 3\Server\Admin\Mods"
 
-    # --- 3. CLONE REPOS ---
+    # --- 3. CLONE & LOGGING ---
     - name: Clone RealityMod & Mods
       working-directory: Build/Admin/Mods
       env:
         GH_TOKEN: ${{ secrets.GH_PAT }}
       run: |
+        # Clone
         git clone --recurse-submodules https://oauth2:$env:GH_TOKEN@github.com/BF3RM/RealityMod.git
         git clone https://oauth2:$env:GH_TOKEN@github.com/BF3RM/BlueprintManager.git
         git clone https://oauth2:$env:GH_TOKEN@github.com/BF3RM/VEManager.git
+
+        # --- LOGGING: Capture Commits for Release Notes ---
+        
+        cd RealityMod
+        $rm_log = git log -1 --format="%h - %s"
+        echo "RM_LOG=$rm_log" >> $env:GITHUB_ENV
+        cd ..
+        
+        cd BlueprintManager
+        $bp_log = git log -1 --format="%h - %s"
+        echo "BP_LOG=$bp_log" >> $env:GITHUB_ENV
+        cd ..
+        
+        cd VEManager
+        $ve_log = git log -1 --format="%h - %s"
+        echo "VE_LOG=$ve_log" >> $env:GITHUB_ENV
 
     - name: Clone RMLevelLoaderGen
       working-directory: ${{ github.workspace }}
@@ -54,8 +70,13 @@ jobs:
         GH_TOKEN: ${{ secrets.GH_PAT }}
       run: |
         git clone --recurse-submodules https://oauth2:$env:GH_TOKEN@github.com/BF3RM/RMLevelLoaderGen.git temp_loader
+        
+        # --- LOGGING ---
+        cd temp_loader
+        $ll_log = git log -1 --format="%h - %s"
+        echo "LL_LOG=$ll_log" >> $env:GITHUB_ENV
 
-    # --- 4. CACHE LOGIC: getting commit hash of level loader  ---
+    # --- 4. CACHE LOGIC: LEVEL LOADER ---
     - name: Get LevelLoader Commit Hash
       id: levelloader_hash
       working-directory: temp_loader
@@ -74,20 +95,17 @@ jobs:
       if: steps.cache-levelloader.outputs.cache-hit != 'true'
       working-directory: temp_loader
       run: |
-        Write-Host "Cache miss! New commit detected. Running LevelLoader Generator..."
+        # Mark as Updated for Release Notes
+        echo "LL_STATUS=**(UPDATED)**" >> $env:GITHUB_ENV
         
-        # Patch Bat File (Fix slashes and remove pause)
         $content = Get-Content generate.bat -Raw
         $content = $content -replace 'pause', 'REM pause'
         $content = $content -replace '/', '\' 
         Set-Content -Path generate.bat -Value $content
 
-        # Execute
         cmd /c generate.bat
 
-        # Move Output to the Build Directory (So Cache can find it to save it)
         $Dest = "..\Build\Admin\Mods\rm-levelloader"
-        
         if (Test-Path "mods\rm-levelloader") {
             Move-Item -Path "mods\rm-levelloader" -Destination $Dest -Force
         } elseif (Test-Path "$env:USERPROFILE\Documents\Battlefield 3\Server\Admin\Mods\RMLevelLoaderGen\mods\rm-levelloader") {
@@ -102,7 +120,6 @@ jobs:
       uses: actions/cache@v4
       with:
         path: Build/Admin/Mods/RealityMod/ui.vuic
-        # Key depends on Vextpack files AND the pnpm lockfile
         key: webui-vuic-${{ hashFiles('vextpack/**', 'Build/Admin/Mods/RealityMod/WebUI/pnpm-lock.yaml') }}
 
     # --- 6. BUILD WEB UI (Only on Cache Miss) ---
@@ -124,18 +141,14 @@ jobs:
       if: steps.cache-webui.outputs.cache-hit != 'true'
       working-directory: Build/Admin/Mods/RealityMod/WebUI
       run: |
-        Write-Host "Cache miss! WebUI files changed. Rebuilding..."
-        pnpm install
+        # Mark as Updated for Release Notes
+        echo "RM_STATUS=**(UPDATED)**" >> $env:GITHUB_ENV
 
-        # Inject Vextpack
+        pnpm install
         $Source = "${{ github.workspace }}\vextpack"
         $Dest = "node_modules\vextpack"
-        if (Test-Path $Source) {
-            Copy-Item -Path $Source -Destination $Dest -Recurse -Force
-        }
-
+        if (Test-Path $Source) { Copy-Item -Path $Source -Destination $Dest -Recurse -Force }
         pnpm build
-        
         if (-not (Test-Path "..\ui.vuic")) { Write-Error "FAILURE: ui.vuic missing"; exit 1 }
 
     # --- 7. CONFIG FILES ---
@@ -203,7 +216,7 @@ jobs:
         vars.teamKillValueDecreasePerSecond 0.01
         vars.teamKillKickForBan 0
         RM.setDevelopers "names" "space" "seperated" 
-        RM.setAdmins "Admin2" "Admin2"
+        RM.setAdmins "Admin1" "Admin2"
         RM.setLightAdmins "LightAdmin1" "LightAdmin2"
         RM.serverInfo "Sample RM Server Info"
         RM.serverLicenseKey $env:LIC_KEY
@@ -224,15 +237,27 @@ jobs:
     # --- 8. PACKAGE & RELEASE ---
     - name: Create Zip Packages
       run: |
-        Compress-Archive -Path Build\* -DestinationPath realityMod-Server-Full.zip
-        Compress-Archive -Path Build\Admin\Mods\* -DestinationPath realityMod-Mods-Only.zip
+        Compress-Archive -Path Build\* -DestinationPath Reality-Server-Full.zip
+        Compress-Archive -Path Build\Admin\Mods\* -DestinationPath Reality-Mods-Only.zip
 
     - name: Create Release
       uses: softprops/action-gh-release@v1
       with:
         tag_name: ${{ steps.tag_version.outputs.new_tag }}
         name: Release ${{ steps.tag_version.outputs.new_tag }}
-        body: "Automated release."
         files: |
-          realityMod-Server-Full.zip
-          realityMod-Mods-Only.zip
+          Reality-Server-Full.zip
+          Reality-Mods-Only.zip
+        body: |
+          Automated Release ${{ steps.tag_version.outputs.new_tag }}
+          
+          ### 📦 Component Status
+          | Component | Status | Version (Commit) |
+          | :--- | :--- | :--- |
+          | **RealityMod** | ${{ env.RM_STATUS }} | `${{ env.RM_LOG }}` |
+          | **LevelLoader** | ${{ env.LL_STATUS }} | `${{ env.LL_LOG }}` |
+          | **BlueprintManager** | (Included) | `${{ env.BP_LOG }}` |
+          | **VEManager** | (Included) | `${{ env.VE_LOG }}` |
+
+          ### 🔧 Bundler Changelog
+          ${{ steps.tag_version.outputs.changelog }}
