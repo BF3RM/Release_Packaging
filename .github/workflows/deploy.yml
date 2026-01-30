@@ -56,49 +56,48 @@ jobs:
 
         pnpm build
         
-        # Check for ui.vuic in parent folder (RealityMod root)
         if (-not (Test-Path "..\ui.vuic")) {
             Write-Error "FAILURE: ui.vuic was not found in RealityMod root!"
             exit 1
         }
 
-    # --- 5. RM LEVEL LOADER GEN (Fixed & Patched) ---
+    # --- 5. RM LEVEL LOADER GEN (Direct Execution) ---
     - name: Run RMLevelLoaderGen
       working-directory: ${{ github.workspace }}
       env:
         GH_TOKEN: ${{ secrets.GH_PAT }}
       run: |
+        # 1. Clone
         git clone https://oauth2:$env:GH_TOKEN@github.com/BF3RM/RMLevelLoaderGen.git temp_loader
         cd temp_loader
         
-        Write-Host "--- Patching generate.bat ---"
-        # 1. Read Content
-        $content = Get-Content generate.bat -Raw
+        # 2. Execute the Generator Directly (Bypassing generate.bat)
+        # Based on the bat file content you shared: 
+        # call .\LevelLoaderGen/bin/levelloader-gen -i .\in rm-levelloader 0.3.9
         
-        # 2. Fix: Remove 'pause'
-        $content = $content -replace 'pause', 'REM pause'
+        $ExePath = ".\LevelLoaderGen\bin\levelloader-gen.exe"
         
-        # 3. Fix: Replace Linux style ./ with Windows .\ (Fixes '.' is not recognized)
-        $content = $content -replace '\./', '.\'
-        
-        # 4. Save and Print
-        Set-Content -Path generate.bat -Value $content
-        Write-Host $content
-        
-        Write-Host "--- Running generate.bat ---"
-        cmd /c generate.bat
+        if (-not (Test-Path $ExePath)) {
+            Write-Warning "Could not find .exe at $ExePath. Listing directory to debug..."
+            Get-ChildItem -Recurse
+            exit 1
+        }
 
-        Write-Host "--- Searching for output ---"
+        Write-Host "--- Executing Generator ---"
+        & $ExePath -i ".\in" "rm-levelloader" "0.3.9"
+
+        # 3. Locate and Move Output
+        # You mentioned it is created in RMLevelLoaderGen\mods
+        $GeneratedPath = "mods\rm-levelloader" 
         $Dest = "..\Build\Admin\Mods\rm-levelloader"
         
-        # Search recursively in the User Profile (Documents, etc) and current dir for the folder
-        $Found = Get-ChildItem -Path "$env:USERPROFILE" -Filter "rm-levelloader" -Recurse -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
-
-        if ($Found) {
-            Write-Host "Found generated folder at: $($Found.FullName)"
-            Move-Item -Path $Found.FullName -Destination $Dest -Force
+        if (Test-Path $GeneratedPath) {
+            Write-Host "Found output at $GeneratedPath"
+            Move-Item -Path $GeneratedPath -Destination $Dest -Force
         } else {
-             Write-Error "FATAL: Could not find 'rm-levelloader' folder anywhere in $env:USERPROFILE"
+             Write-Error "FATAL: Could not find generated 'mods\rm-levelloader' folder."
+             Write-Host "--- Listing Directory Content ---"
+             Get-ChildItem -Recurse
              exit 1
         }
 
