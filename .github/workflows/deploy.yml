@@ -1,0 +1,143 @@
+name: Build BF3 Reality Mod Server
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout Main Repo
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+
+    - name: Install PNPM
+      run: npm install -g pnpm
+
+    - name: Create Directory Structure
+      run: |
+        New-Item -ItemType Directory -Force -Path "Build\Admin\Mods"
+
+    # --- 1. REALITY MOD & WEBUI (Private Repo) ---
+    - name: Clone and Build RealityMod WebUI
+      working-directory: Build/Admin/Mods
+      env:
+        GH_TOKEN: ${{ secrets.GH_PAT }}
+      run: |
+        # Use the token in the URL for authentication
+        git clone --recurse-submodules https://oauth2:$env:GH_TOKEN@github.com/BF3RM/RealityMod.git
+        cd RealityMod/WebUI
+        pnpm install
+        pnpm build
+        if (-not (Test-Path "ui.vuic")) { Write-Error "ui.vuic was not created!" }
+
+    # --- 2. RM LEVEL LOADER GEN (Private Repo) ---
+    - name: Run RMLevelLoaderGen
+      working-directory: ${{ github.workspace }}
+      env:
+        GH_TOKEN: ${{ secrets.GH_PAT }}
+      run: |
+        git clone https://oauth2:$env:GH_TOKEN@github.com/BF3RM/RMLevelLoaderGen.git temp_loader
+        cd temp_loader
+        .\generate.bat
+        
+        # Move generated folder to Build directory
+        if (Test-Path "mods\rm-levelloader") {
+            Move-Item -Path "mods\rm-levelloader" -Destination "..\Build\Admin\Mods\rm-levelloader"
+        } else {
+             Write-Error "Could not find generated rm-levelloader folder."
+        }
+
+    # --- 3. OTHER MODS (Private Repos) ---
+    - name: Clone Other Mods
+      working-directory: Build/Admin/Mods
+      env:
+        GH_TOKEN: ${{ secrets.GH_PAT }}
+      run: |
+        git clone https://oauth2:$env:GH_TOKEN@github.com/BF3RM/BlueprintManager.git
+        git clone https://oauth2:$env:GH_TOKEN@github.com/BF3RM/VEManager.git
+
+    # --- 4. CONFIGURATION FILES ---
+    - name: Generate Config Files
+      working-directory: Build/Admin
+      env:
+        # Pulling these from Github Secrets for security
+        RCON_PW: ${{ secrets.RCON_PASSWORD }} 
+        LIC_KEY: ${{ secrets.LICENSE_KEY }}
+      run: |
+        New-Item -Path "BanList.txt" -ItemType File -Force
+        Set-Content -Path "ModList.txt" -Value "RealityMod`r`nrm-levelloader`r`nBlueprintManager`r`nVEManager"
+
+        $mapListContent = @"
+        #AAS Layers
+        #XP1_001 AdvanceAndSecureStd 1 # Strike at Karkand
+        #XP1_002 AdvanceAndSecureStd 1 # Gulf of Oman
+        #XP1_003 AdvanceAndSecureStd 1 # Sharqi Peninsula
+        #XP1_004 AdvanceAndSecureStd 1 # Wake Island
+        #XP3_Desert AdvanceAndSecureStd 1 # Bandar Desert
+        #XP3_Shield AdvanceAndSecureStd 6 # Issue 226
+        #XP4_Parl AdvanceAndSecureStd 1 # Azadi Palace
+        #XP5_001 AdvanceAndSecureStd 1 # Operation Riverside
+        XP5_002 AdvanceAndSecureStd 1 # Kandahar
+        #XP5_003 AdvanceAndSecureStd 1 # Bay of Gdansk
+        #XP5_004 AdvanceAndSecureStd 1 # Chernihivska Oblast Pipeline
+        "@
+        Set-Content -Path "MapList.txt" -Value $mapListContent
+
+        # We use the Env variables here for the sensitive data
+        $startupContent = @"
+        # RM Server Startup.txt Example
+
+        # RCON Password
+        admin.password "$env:RCON_PW"
+        # Game Password
+        vars.gamePassword "password"
+
+        # Server
+        vars.serverName "<Server Name>"
+        vars.maxPlayers 80
+        vu.serverbanner https://i.imgur.com/B4bCwpq.jpg 
+        vars.idleTimeout 9999
+
+        # Teamkilling
+        vars.teamKillCountForKick 0
+        vars.teamKillValueForKick 2
+        vars.teamKillValueIncrease 0.525
+        vars.teamKillValueDecreasePerSecond 0.01
+        vars.teamKillKickForBan 0
+
+        # RM Commands
+        RM.setDevelopers "names" "space" "seperated" 
+        RM.setAdmins "[ENTE]VileEnd" "Admin2"
+        RM.setLightAdmins "LightAdmin1" "LightAdmin2"
+        RM.serverInfo "Sample RM Server Info"
+        RM.serverLicenseKey $env:LIC_KEY
+        RM.ingameBanner https://i.imgur.com/Vth3wBa.jpg
+        RM.pingLimitEnable true
+        RM.pingLimitInMs 250
+        RM.autoPerfEnabled false
+        RM.autoPerfMaxPlayers 80
+        RM.tempReservedSlotsEnabled true
+        RM.tempReservedSlotsRejoinTime 60.0
+        RM.defaultPreRoundTime 180
+        RM.setAutoBalancer false
+
+        # Reserved Slots
+        reservedSlotsList.add "PlayerName1"
+        reservedSlotsList.add "PlayerName2"
+        "@
+        Set-Content -Path "Startup.txt" -Value $startupContent
+
+    # --- 5. FINALIZE ---
+    - name: Upload Server Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: BF3-Server-Files
+        path: Build/
