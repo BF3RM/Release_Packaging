@@ -22,10 +22,7 @@ jobs:
       env:
         GH_TOKEN: ${{ secrets.GH_PAT }}
       run: |
-        # Clone RealityMod
         git clone --recurse-submodules https://oauth2:$env:GH_TOKEN@github.com/BF3RM/RealityMod.git
-        
-        # Clone Other Mods
         git clone https://oauth2:$env:GH_TOKEN@github.com/BF3RM/BlueprintManager.git
         git clone https://oauth2:$env:GH_TOKEN@github.com/BF3RM/VEManager.git
 
@@ -44,28 +41,29 @@ jobs:
     - name: Install & Inject Vextpack & Build
       working-directory: Build/Admin/Mods/RealityMod/WebUI
       run: |
-        # 1. Install Dependencies
         pnpm install
 
-        # 2. Inject vextpack into node_modules
-        # We assume 'vextpack' folder is in the root of your git repo (github.workspace)
         $Source = "${{ github.workspace }}\vextpack"
         $Dest = "node_modules\vextpack"
         
         if (Test-Path $Source) {
-            Write-Host "Copying vextpack from $Source to $Dest"
+            Write-Host "Injecting vextpack from $Source to $Dest"
             Copy-Item -Path $Source -Destination $Dest -Recurse -Force
         } else {
             Write-Warning "vextpack folder not found at root! Skipping injection."
         }
 
-        # 3. Build
         pnpm build
         
-        # Validation
-        if (-not (Test-Path "ui.vuic")) { Write-Error "ui.vuic was not created!" }
+        if (Test-Path "..\ui.vuic") {
+            Write-Host "SUCCESS: ui.vuic found in RealityMod root."
+        } else {
+            Write-Error "FAILURE: ui.vuic was not found in ../ui.vuic!"
+            # Debugging: List files in parent dir to see what happened
+            Get-ChildItem -Path ".." | Select-Object Name
+            exit 1
+        }
 
-    # --- 5. RM LEVEL LOADER GEN ---
     - name: Run RMLevelLoaderGen
       working-directory: ${{ github.workspace }}
       env:
@@ -75,14 +73,12 @@ jobs:
         cd temp_loader
         .\generate.bat
         
-        # Move generated folder to Build directory
         if (Test-Path "mods\rm-levelloader") {
             Move-Item -Path "mods\rm-levelloader" -Destination "..\Build\Admin\Mods\rm-levelloader"
         } else {
              Write-Error "Could not find generated rm-levelloader folder."
         }
 
-    # --- 6. CONFIGURATION FILES ---
     - name: Generate Config Files
       working-directory: Build/Admin
       env:
@@ -151,7 +147,6 @@ jobs:
         "@
         Set-Content -Path "Startup.txt" -Value $startupContent
 
-    # --- 7. FINALIZE ---
     - name: Upload Server Artifact
       uses: actions/upload-artifact@v4
       with:
