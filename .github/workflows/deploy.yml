@@ -3,11 +3,10 @@ name: Auto Build & Release
 on:
   push:
     branches: [ "main", "master" ]
-    # We REMOVED the 'tags' trigger. Now it triggers on every push to master.
   workflow_dispatch:
 
 permissions:
-  contents: write # Essential for creating tags and releases
+  contents: write
 
 jobs:
   auto-release:
@@ -17,18 +16,18 @@ jobs:
     - name: Checkout Main Repo
       uses: actions/checkout@v4
       with:
-        fetch-depth: 0 # Required to calculate version history
+        fetch-depth: 0 
 
-    # --- 1. CALCULATE NEXT VERSION ---
+    # --- 1. VERSIONING ---
     - name: Bump Version and Push Tag
       id: tag_version
       uses: mathieudutour/github-tag-action@v6.1
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
-        default_bump: patch  # 'patch' (v1.0.1), 'minor' (v1.1.0), or 'major' (v2.0.0)
+        default_bump: patch
         release_branches: main,master
 
-    # --- SETUP ENVIRONMENTS ---
+    # --- 2. SETUP ENVIRONMENT ---
     - name: Setup Dotnet
       uses: actions/setup-dotnet@v3
       with:
@@ -44,7 +43,7 @@ jobs:
         New-Item -ItemType Directory -Force -Path "Build\Admin\Mods"
         New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\Documents\Battlefield 3\Server\Admin\Mods"
 
-    # --- CLONE REPOS ---
+    # --- 3. CLONE ALL REPOS (Required early for Cache Hashing) ---
     - name: Clone RealityMod & Mods
       working-directory: Build/Admin/Mods
       env:
@@ -54,49 +53,93 @@ jobs:
         git clone https://oauth2:$env:GH_TOKEN@github.com/BF3RM/BlueprintManager.git
         git clone https://oauth2:$env:GH_TOKEN@github.com/BF3RM/VEManager.git
 
-    # --- SETUP NODE & PNPM ---
-    - name: Install pnpm
+    - name: Clone RMLevelLoaderGen
+      working-directory: ${{ github.workspace }}
+      env:
+        GH_TOKEN: ${{ secrets.GH_PAT }}
+      run: |
+        git clone --recurse-submodules https://oauth2:$env:GH_TOKEN@github.com/BF3RM/RMLevelLoaderGen.git temp_loader
+
+    # --- 4. CACHE LOGIC: LEVEL LOADER ---
+    - name: Get LevelLoader Commit Hash
+      id: levelloader_hash
+      working-directory: temp_loader
+      run: |
+        $hash = git rev-parse HEAD
+        echo "hash=$hash" >> $env:GITHUB_OUTPUT
+
+    - name: Cache LevelLoader Binary
+      id: cache-levelloader
+      uses: actions/cache@v4
+      with:
+        # Cache the bin folder containing the .exe
+        path: temp_loader/LevelLoaderGen/bin
+        # Key depends on the specific commit of the repo. If repo updates, cache invalidates.
+        key: levelloader-bin-${{ steps.levelloader_hash.outputs.hash }}
+
+    - name: Build LevelLoader (If Cache Miss)
+      if: steps.cache-levelloader.outputs.cache-hit != 'true'
+      working-directory: temp_loader
+      run: |
+        Write-Host "Cache miss! Building LevelLoaderGen..."
+        dotnet build .\LevelLoaderGen\LevelLoaderGen.csproj -c Release -o .\LevelLoaderGen\bin
+
+    # --- 5. CACHE LOGIC: WEB UI (VEXTPACK) ---
+    # We create a hash based on Vextpack folder AND the lockfile
+    - name: Cache WebUI Output
+      id: cache-webui
+      uses: actions/cache@v4
+      with:
+        # We cache the final result file
+        path: Build/Admin/Mods/RealityMod/ui.vuic
+        # Key changes if vextpack files change OR if pnpm-lock.yaml changes
+        key: webui-vuic-${{ hashFiles('vextpack/**', 'Build/Admin/Mods/RealityMod/WebUI/pnpm-lock.yaml') }}
+
+    # --- 6. BUILD WEB UI (Only if Cache Miss) ---
+    - name: Install pnpm (Only needed if building)
+      if: steps.cache-webui.outputs.cache-hit != 'true'
       uses: pnpm/action-setup@v2
       with:
         version: 9
 
-    - name: Setup Node.js with Caching
+    - name: Setup Node (Only needed if building)
+      if: steps.cache-webui.outputs.cache-hit != 'true'
       uses: actions/setup-node@v4
       with:
         node-version: '20'
         cache: 'pnpm'
         cache-dependency-path: 'Build/Admin/Mods/RealityMod/WebUI/pnpm-lock.yaml'
 
-    # --- BUILD WEBUI ---
-    - name: Build WebUI (Inject Vextpack)
+    - name: Build WebUI & Inject Vextpack
+      if: steps.cache-webui.outputs.cache-hit != 'true'
       working-directory: Build/Admin/Mods/RealityMod/WebUI
       run: |
+        Write-Host "Cache miss! Building WebUI..."
         pnpm install
+
+        # Inject Vextpack
         $Source = "${{ github.workspace }}\vextpack"
         $Dest = "node_modules\vextpack"
-        if (Test-Path $Source) { Copy-Item -Path $Source -Destination $Dest -Recurse -Force }
+        if (Test-Path $Source) {
+            Copy-Item -Path $Source -Destination $Dest -Recurse -Force
+        }
+
         pnpm build
+        
+        # Verify creation (cached step expects this file to exist for upload)
         if (-not (Test-Path "..\ui.vuic")) { Write-Error "FAILURE: ui.vuic missing"; exit 1 }
 
-    # --- RM LEVEL LOADER GEN ---
+    # --- 7. RUN GENERATOR ---
     - name: Run RMLevelLoaderGen
-      working-directory: ${{ github.workspace }}
-      env:
-        GH_TOKEN: ${{ secrets.GH_PAT }}
+      working-directory: temp_loader
       run: |
-        git clone --recurse-submodules https://oauth2:$env:GH_TOKEN@github.com/BF3RM/RMLevelLoaderGen.git temp_loader
-        cd temp_loader
-        
-        # Build Tool
-        dotnet build .\LevelLoaderGen\LevelLoaderGen.csproj -c Release -o .\LevelLoaderGen\bin
-        
         # Patch Bat
         $content = Get-Content generate.bat -Raw
         $content = $content -replace 'pause', 'REM pause'
         $content = $content -replace '/', '\' 
         Set-Content -Path generate.bat -Value $content
 
-        # Run
+        # Run (It will use the bin folder from Cache or Build step)
         cmd /c generate.bat
 
         # Move Output
@@ -109,7 +152,7 @@ jobs:
              Write-Error "FATAL: Output missing"; exit 1
         }
 
-    # --- CONFIG FILES ---
+    # --- 8. CONFIG FILES ---
     - name: Generate Config Files
       working-directory: Build/Admin
       env:
@@ -125,13 +168,37 @@ jobs:
         #XP1_002 AdvanceAndSecureStd 1 # Gulf of Oman
         #XP1_003 AdvanceAndSecureStd 1 # Sharqi Peninsula
         #XP1_004 AdvanceAndSecureStd 1 # Wake Island
-        #XP3_Desert AdvanceAndSecureStd 1 # Bandar Desert
+        #XP3_Desert AdvanceAndSecureStd 1 #  Bandar Desert
         #XP3_Shield AdvanceAndSecureStd 6 # Issue 226
         #XP4_Parl AdvanceAndSecureStd 1 # Azadi Palace
         #XP5_001 AdvanceAndSecureStd 1 # Operation Riverside
         XP5_002 AdvanceAndSecureStd 1 # Kandahar
         #XP5_003 AdvanceAndSecureStd 1 # Bay of Gdansk
         #XP5_004 AdvanceAndSecureStd 1 # Chernihivska Oblast Pipeline
+
+        #Skirmish Layers
+        #XP1_001 SkirmishStd 1 # Strike at Karkand
+        #XP1_002 SkirmishStd 1 # Gulf of Oman
+        #XP1_003 SkirmishStd 1 # Sharqi Peninsula
+        #XP1_004 SkirmishStd 1 # Wake Island
+        #XP3_Desert SkirmishStd 1 #  Bandar Desert
+        #XP3_Shield SkirmishStd 6 # Issue 226
+        #XP4_Parl SkirmishStd 1 # Azadi Palace
+        #XP5_001 SkirmishStd 1 # Operation Riverside
+        #XP5_002 SkirmishStd 1 # Kandahar
+        #XP5_003 SkirmishStd 1 # Bay of Gdansk
+        #XP5_004 SkirmishStd 1 # Chernihivska Oblast Pipeline
+
+
+        #Insurgency Layers
+        #XP1_001 InsurgencyStd 1 # Strike at Karkand
+        #XP1_002 InsurgencyStd 1 # Gulf of Oman
+        #XP1_003 InsurgencyStd 1 # Sharqi Peninsula
+        #XP3_Desert InsurgencyStd 1 # Bandar Desert
+        #XP4_Parl InsurgencyStd 1  # Azadi Palace
+        #XP5_002 InsurgencyStd 1
+
+        #XP3_Desert TrainingStd 1 # Bandar Desert
         "@
         Set-Content -Path "MapList.txt" -Value $mapListContent
 
@@ -149,7 +216,7 @@ jobs:
         vars.teamKillValueDecreasePerSecond 0.01
         vars.teamKillKickForBan 0
         RM.setDevelopers "names" "space" "seperated" 
-        RM.setAdmins "[ENTE]VileEnd" "Admin2"
+        RM.setAdmins "Admin1" "Admin2"
         RM.setLightAdmins "LightAdmin1" "LightAdmin2"
         RM.serverInfo "Sample RM Server Info"
         RM.serverLicenseKey $env:LIC_KEY
@@ -167,20 +234,18 @@ jobs:
         "@
         Set-Content -Path "Startup.txt" -Value $startupContent
 
-    # --- PACKAGE ZIPS ---
+    # --- 9. PACKAGE & RELEASE ---
     - name: Create Zip Packages
       run: |
         Compress-Archive -Path Build\* -DestinationPath realityMod_Full_Setup.zip
-        Compress-Archive -Path Build\Admin\Mods\* -DestinationPath realityMod_Mods_Only.zip
+        Compress-Archive -Path Build\Admin\Mods\* -DestinationPath Reality-Mods-Only.zip
 
-    # --- CREATE RELEASE ---
     - name: Create Release
       uses: softprops/action-gh-release@v1
       with:
-        # Uses the tag generated by step 1 (e.g., v1.0.1)
         tag_name: ${{ steps.tag_version.outputs.new_tag }}
         name: Release ${{ steps.tag_version.outputs.new_tag }}
-        body: "Automated release triggered by push to master."
+        body: "Automated release."
         files: |
           realityMod_Full_Setup.zip
-          realityMod_Mods_Only.zip
+          Reality-Mods-Only.zip
