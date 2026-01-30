@@ -13,9 +13,17 @@ jobs:
     - name: Checkout Main Repo
       uses: actions/checkout@v4
 
+    # Needed to compile the missing exe
+    - name: Setup Dotnet
+      uses: actions/setup-dotnet@v3
+      with:
+        dotnet-version: '6.0.x'
+
     - name: Create Directory Structure
       run: |
         New-Item -ItemType Directory -Force -Path "Build\Admin\Mods"
+        # Pre-create the Documents path so the bat file has a valid target if it uses absolute paths
+        New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\Documents\Battlefield 3\Server\Admin\Mods"
 
     # --- 1. CLONE REALITYMOD & MODS ---
     - name: Clone RealityMod & Mods
@@ -61,42 +69,45 @@ jobs:
             exit 1
         }
 
-    # --- 5. RM LEVEL LOADER GEN (Direct Execution) ---
+    # --- 5. RM LEVEL LOADER GEN (Build -> Patch Bat -> Run Bat) ---
     - name: Run RMLevelLoaderGen
       working-directory: ${{ github.workspace }}
       env:
         GH_TOKEN: ${{ secrets.GH_PAT }}
       run: |
-        # 1. Clone
-        git clone https://oauth2:$env:GH_TOKEN@github.com/BF3RM/RMLevelLoaderGen.git temp_loader
+        # 1. Clone Recursively
+        git clone --recurse-submodules https://oauth2:$env:GH_TOKEN@github.com/BF3RM/RMLevelLoaderGen.git temp_loader
         cd temp_loader
         
-        # 2. Execute the Generator Directly (Bypassing generate.bat)
-        # Based on the bat file content you shared: 
-        # call .\LevelLoaderGen/bin/levelloader-gen -i .\in rm-levelloader 0.3.9
+        # 2. BUILD THE TOOL (Essential step if exe is missing)
+        Write-Host "--- Building LevelLoaderGen ---"
+        dotnet build .\LevelLoaderGen\LevelLoaderGen.csproj -c Release -o .\LevelLoaderGen\bin
         
-        $ExePath = ".\LevelLoaderGen\bin\levelloader-gen.exe"
-        
-        if (-not (Test-Path $ExePath)) {
-            Write-Warning "Could not find .exe at $ExePath. Listing directory to debug..."
-            Get-ChildItem -Recurse
-            exit 1
-        }
+        # 3. PATCH generate.bat
+        # Remove 'pause' (so it doesn't hang) and fix slashes just in case
+        $content = Get-Content generate.bat -Raw
+        $content = $content -replace 'pause', 'REM pause'
+        $content = $content -replace '/', '\' 
+        Set-Content -Path generate.bat -Value $content
 
-        Write-Host "--- Executing Generator ---"
-        & $ExePath -i ".\in" "rm-levelloader" "0.3.9"
+        # 4. EXECUTE generate.bat
+        Write-Host "--- Executing generate.bat ---"
+        cmd /c generate.bat
 
-        # 3. Locate and Move Output
-        # You mentioned it is created in RMLevelLoaderGen\mods
-        $GeneratedPath = "mods\rm-levelloader" 
+        # 5. FIND AND MOVE OUTPUT
         $Dest = "..\Build\Admin\Mods\rm-levelloader"
         
-        if (Test-Path $GeneratedPath) {
-            Write-Host "Found output at $GeneratedPath"
-            Move-Item -Path $GeneratedPath -Destination $Dest -Force
+        # Check Local Folder (Most likely target based on bat file)
+        if (Test-Path "mods\rm-levelloader") {
+            Write-Host "Found output in local mods folder."
+            Move-Item -Path "mods\rm-levelloader" -Destination $Dest -Force
+        } 
+        # Check Documents Folder (Fallback)
+        elseif (Test-Path "$env:USERPROFILE\Documents\Battlefield 3\Server\Admin\Mods\RMLevelLoaderGen\mods\rm-levelloader") {
+             Write-Host "Found output in Documents folder."
+             Move-Item -Path "$env:USERPROFILE\Documents\Battlefield 3\Server\Admin\Mods\RMLevelLoaderGen\mods\rm-levelloader" -Destination $Dest -Force
         } else {
              Write-Error "FATAL: Could not find generated 'mods\rm-levelloader' folder."
-             Write-Host "--- Listing Directory Content ---"
              Get-ChildItem -Recurse
              exit 1
         }
