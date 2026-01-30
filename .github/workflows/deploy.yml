@@ -17,6 +17,7 @@ jobs:
       run: |
         New-Item -ItemType Directory -Force -Path "Build\Admin\Mods"
 
+    # --- 1. CLONE REALITYMOD & MODS ---
     - name: Clone RealityMod & Mods
       working-directory: Build/Admin/Mods
       env:
@@ -26,11 +27,13 @@ jobs:
         git clone https://oauth2:$env:GH_TOKEN@github.com/BF3RM/BlueprintManager.git
         git clone https://oauth2:$env:GH_TOKEN@github.com/BF3RM/VEManager.git
 
+    # --- 2. INSTALL PNPM ---
     - name: Install pnpm
       uses: pnpm/action-setup@v2
       with:
         version: 9
 
+    # --- 3. SETUP NODE & CACHE ---
     - name: Setup Node.js with Caching
       uses: actions/setup-node@v4
       with:
@@ -38,6 +41,7 @@ jobs:
         cache: 'pnpm'
         cache-dependency-path: 'Build/Admin/Mods/RealityMod/WebUI/pnpm-lock.yaml'
 
+    # --- 4. BUILD WEBUI ---
     - name: Install & Inject Vextpack & Build
       working-directory: Build/Admin/Mods/RealityMod/WebUI
       run: |
@@ -52,11 +56,13 @@ jobs:
 
         pnpm build
         
+        # Check for ui.vuic in parent folder (RealityMod root)
         if (-not (Test-Path "..\ui.vuic")) {
-            Write-Error "FAILURE: ui.vuic was not found in ../ui.vuic!"
+            Write-Error "FAILURE: ui.vuic was not found in RealityMod root!"
             exit 1
         }
 
+    # --- 5. RM LEVEL LOADER GEN (Fixed & Patched) ---
     - name: Run RMLevelLoaderGen
       working-directory: ${{ github.workspace }}
       env:
@@ -65,23 +71,38 @@ jobs:
         git clone https://oauth2:$env:GH_TOKEN@github.com/BF3RM/RMLevelLoaderGen.git temp_loader
         cd temp_loader
         
-        (Get-Content generate.bat) -replace 'pause', 'REM pause' | Set-Content generate.bat
+        Write-Host "--- Patching generate.bat ---"
+        # 1. Read Content
+        $content = Get-Content generate.bat -Raw
         
-        cmd /c "echo. | generate.bat"
+        # 2. Fix: Remove 'pause'
+        $content = $content -replace 'pause', 'REM pause'
+        
+        # 3. Fix: Replace Linux style ./ with Windows .\ (Fixes '.' is not recognized)
+        $content = $content -replace '\./', '.\'
+        
+        # 4. Save and Print
+        Set-Content -Path generate.bat -Value $content
+        Write-Host $content
+        
+        Write-Host "--- Running generate.bat ---"
+        cmd /c generate.bat
 
-        $LocalPath = "mods\rm-levelloader"
-        $DocPath = "$env:USERPROFILE\Documents\Battlefield 3\Server\Admin\Mods\RMLevelLoaderGen\mods\rm-levelloader"
+        Write-Host "--- Searching for output ---"
         $Dest = "..\Build\Admin\Mods\rm-levelloader"
+        
+        # Search recursively in the User Profile (Documents, etc) and current dir for the folder
+        $Found = Get-ChildItem -Path "$env:USERPROFILE" -Filter "rm-levelloader" -Recurse -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
 
-        if (Test-Path $LocalPath) {
-            Move-Item -Path $LocalPath -Destination $Dest -Force
-        } elseif (Test-Path $DocPath) {
-            Move-Item -Path $DocPath -Destination $Dest -Force
+        if ($Found) {
+            Write-Host "Found generated folder at: $($Found.FullName)"
+            Move-Item -Path $Found.FullName -Destination $Dest -Force
         } else {
-             Write-Error "Could not find generated rm-levelloader folder."
+             Write-Error "FATAL: Could not find 'rm-levelloader' folder anywhere in $env:USERPROFILE"
              exit 1
         }
 
+    # --- 6. CONFIG FILES ---
     - name: Generate Config Files
       working-directory: Build/Admin
       env:
@@ -113,20 +134,17 @@ jobs:
         admin.password "$env:RCON_PW"
         vars.gamePassword "password"
 
-        # Server
         vars.serverName "<Server Name>"
         vars.maxPlayers 80
         vu.serverbanner https://i.imgur.com/B4bCwpq.jpg 
         vars.idleTimeout 9999
 
-        # Teamkilling
         vars.teamKillCountForKick 0
         vars.teamKillValueForKick 2
         vars.teamKillValueIncrease 0.525
         vars.teamKillValueDecreasePerSecond 0.01
         vars.teamKillKickForBan 0
 
-        # RM Commands
         RM.setDevelopers "names" "space" "seperated" 
         RM.setAdmins "[ENTE]VileEnd" "Admin2"
         RM.setLightAdmins "LightAdmin1" "LightAdmin2"
@@ -142,12 +160,12 @@ jobs:
         RM.defaultPreRoundTime 180
         RM.setAutoBalancer false
 
-        # Reserved Slots
         reservedSlotsList.add "PlayerName1"
         reservedSlotsList.add "PlayerName2"
         "@
         Set-Content -Path "Startup.txt" -Value $startupContent
 
+    # --- 7. FINALIZE ---
     - name: Upload Server Artifact
       uses: actions/upload-artifact@v4
       with:
