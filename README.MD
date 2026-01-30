@@ -1,11 +1,11 @@
 [![Auto Build & Release](https://github.com/BF3RM/Release_Packaging/actions/workflows/deploy.yml/badge.svg?branch=main)](https://github.com/BF3RM/Release_Packaging/actions/workflows/deploy.yml)
 [![Auto Build & Release](https://github.com/BF3RM/Release_Packaging/actions/workflows/deploy.yml/badge.svg?branch=main&event=workflow_run)](https://github.com/BF3RM/Release_Packaging/actions/workflows/deploy.yml)
 
-BF3 Reality Mod Server Bundler
+## BF3 Reality Mod Server Bundler
 
 A Fully automated build and setup process for  all the RM Mods - with the goal to not execut anyhting locally anymore - only copying the files. (script could automate that...). Could be Also distributed to the PPL hosting the Server - which would make this setup easier-
 
-Features
+# Features
 
 Automated Builds: Automatically compiles the RealityMod WebUI (ui.vuic) and injects required dependencies.
 
@@ -15,22 +15,17 @@ Smart Packaging: Bundles RealityMod, LevelLoader, BlueprintManager, and VEManage
 
 Config Ready: Generates standard configuration files (Startup.txt, ModList.txt) automatically.
 
-How to Use
+# How to Use
 
-Option 1: Download Release
-Go to the Releases tab and download:
+- Option 1: Download Release
+Go to the Releases tab and download: [click](https://github.com/BF3RM/Release_Packaging/releases/tag/latest)
 
-Reality-Server-Full.zip: Complete server setup with default configs. (for Fresh Start)
+Reality-Server-Full.zip: Complete server setup with default configs. (for Fresh Start)[Click](https://github.com/BF3RM/Release_Packaging/releases/download/latest/Reality-Server-Full.zip)
 
-Reality-Mods-Only.zip: Just the Mods folder (best for updates).
-
-Option 2: Git Clone
-You can clone the latest tag to get the newest build artifacts:
-
-git clone --branch latest [click](https://github.com/BF3RM/Release_Packaging.git)
+Reality-Mods-Only.zip: Just the Mods folder (best for updates).[Click](https://github.com/BF3RM/Release_Packaging/releases/download/latest/Reality-Mods-Only.zip)
 
 
-Manual Installation Reference
+- Option 2: Manual Installation Reference
 
 If you need to build this manually for debugging, here is the process this repo automates:
 
