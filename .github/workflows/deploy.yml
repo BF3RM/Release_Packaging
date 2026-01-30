@@ -44,38 +44,37 @@ jobs:
       env:
         GH_TOKEN: ${{ secrets.GH_PAT }}
       run: |
-        # Clone
-        git clone --recurse-submodules https://oauth2:$env:GH_TOKEN@github.com/BF3RM/RealityMod.git
-        git clone https://oauth2:$env:GH_TOKEN@github.com/BF3RM/BlueprintManager.git
-        git clone https://oauth2:$env:GH_TOKEN@github.com/BF3RM/VEManager.git
-
-        # --- LOGGING: Capture Commits for Release Notes ---
-        
+        # Optimization: Increased depth to 5 to fetch enough history for log -3
+        git clone --depth 5 --recurse-submodules https://oauth2:$env:GH_TOKEN@github.com/BF3RM/RealityMod.git
+        git clone --depth 5 https://oauth2:$env:GH_TOKEN@github.com/BF3RM/BlueprintManager.git
+        git clone --depth 5 https://oauth2:$env:GH_TOKEN@github.com/BF3RM/VEManager.git
+    
         cd RealityMod
-        $rm_log = git log -1 --format="%h - %s"
-        echo "RM_LOG=$rm_log" >> $env:GITHUB_ENV
+        $rm_log = (git log -3 --format="%h - %s") -join '<br>'
+        "RM_LOG=$rm_log" >> $env:GITHUB_ENV
         cd ..
         
         cd BlueprintManager
-        $bp_log = git log -1 --format="%h - %s"
-        echo "BP_LOG=$bp_log" >> $env:GITHUB_ENV
+        $bp_log = (git log -3 --format="%h - %s") -join '<br>'
+        "BP_LOG=$bp_log" >> $env:GITHUB_ENV
         cd ..
         
         cd VEManager
-        $ve_log = git log -1 --format="%h - %s"
-        echo "VE_LOG=$ve_log" >> $env:GITHUB_ENV
+        $ve_log = (git log -3 --format="%h - %s") -join '<br>'
+        "VE_LOG=$ve_log" >> $env:GITHUB_ENV
 
     - name: Clone RMLevelLoaderGen
       working-directory: ${{ github.workspace }}
       env:
         GH_TOKEN: ${{ secrets.GH_PAT }}
       run: |
-        git clone --recurse-submodules https://oauth2:$env:GH_TOKEN@github.com/BF3RM/RMLevelLoaderGen.git temp_loader
+        # Optimization: Increased depth to 5
+        git clone --depth 5 --recurse-submodules https://oauth2:$env:GH_TOKEN@github.com/BF3RM/RMLevelLoaderGen.git temp_loader
         
         # --- LOGGING ---
         cd temp_loader
-        $ll_log = git log -1 --format="%h - %s"
-        echo "LL_LOG=$ll_log" >> $env:GITHUB_ENV
+        $ll_log = (git log -3 --format="%h - %s") -join '<br>'
+        "LL_LOG=$ll_log" >> $env:GITHUB_ENV
 
     # --- 4. CACHE LOGIC: LEVEL LOADER ---
     - name: Get LevelLoader Commit Hash
@@ -99,11 +98,13 @@ jobs:
         # Mark as Updated for Release Notes
         echo "LL_STATUS=**(UPDATED)**" >> $env:GITHUB_ENV
         
+        # Patch Bat File: Remove 'pause' and fix slash direction
         $content = Get-Content generate.bat -Raw
         $content = $content -replace 'pause', 'REM pause'
         $content = $content -replace '/', '\' 
         Set-Content -Path generate.bat -Value $content
 
+        # Run the batch file (which triggers the Python code)
         cmd /c generate.bat
 
         $Dest = "..\Build\Admin\Mods\rm-levelloader"
@@ -237,8 +238,16 @@ jobs:
     # --- 8. PACKAGE & RELEASE ---
     - name: Create Zip Packages
       run: |
-        Compress-Archive -Path Build\* -DestinationPath Reality-Server-Full.zip
-        Compress-Archive -Path Build\Admin\Mods\* -DestinationPath Reality-Mods-Only.zip
+        # Optimization: Use 7zip (faster than Compress-Archive)
+        # We change directory to avoid including parent folders in zip structure
+        
+        pushd Build
+        7z a -tzip ..\Reality-Server-Full.zip * -r
+        popd
+
+        pushd Build\Admin\Mods
+        7z a -tzip ..\..\..\Reality-Mods-Only.zip * -r
+        popd
 
     - name: Create Release
       uses: softprops/action-gh-release@v1
@@ -252,17 +261,17 @@ jobs:
           Automated Release ${{ steps.tag_version.outputs.new_tag }}
           
           ### 📦 Component Status
-          | Component | Status | Version (Commit) |
+          | Component | Status | Last 3 Commits |
           | :--- | :--- | :--- |
-          | **RealityMod** | ${{ env.RM_STATUS }} | `${{ env.RM_LOG }}` |
-          | **LevelLoader** | ${{ env.LL_STATUS }} | `${{ env.LL_LOG }}` |
-          | **BlueprintManager** | (Included) | `${{ env.BP_LOG }}` |
-          | **VEManager** | (Included) | `${{ env.VE_LOG }}` |
+          | **RealityMod** | ${{ env.RM_STATUS }} | ${{ env.RM_LOG }} |
+          | **LevelLoader** | ${{ env.LL_STATUS }} | ${{ env.LL_LOG }} |
+          | **BlueprintManager** | (Included) | ${{ env.BP_LOG }} |
+          | **VEManager** | (Included) | ${{ env.VE_LOG }} |
 
           ### 🔧 Bundler Changelog
           ${{ steps.tag_version.outputs.changelog }}
 
-    # --- 9. UPDATE LATEST TAG ---
+    # --- 9. UPDATE LATEST TAG (Add tag to same commit) ---
     - name: Update 'latest' Tag
       run: |
         git config user.name "GitHub Actions"
