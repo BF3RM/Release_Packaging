@@ -55,7 +55,7 @@ jobs:
       run: |
         git clone --recurse-submodules https://oauth2:$env:GH_TOKEN@github.com/BF3RM/RMLevelLoaderGen.git temp_loader
 
-    # --- 4. CACHE LOGIC: LEVEL LOADER ---
+    # --- 4. CACHE LOGIC: getting commit hash of level loader  ---
     - name: Get LevelLoader Commit Hash
       id: levelloader_hash
       working-directory: temp_loader
@@ -67,9 +67,7 @@ jobs:
       id: cache-levelloader
       uses: actions/cache@v4
       with:
-        # We cache the FINAL folder location
         path: Build/Admin/Mods/rm-levelloader
-        # The key is the Commit Hash. If repo updates, cache is invalid -> Rebuild.
         key: levelloader-output-${{ steps.levelloader_hash.outputs.hash }}
 
     - name: Run Generator (Only on Cache Miss)
@@ -156,13 +154,38 @@ jobs:
         #XP1_002 AdvanceAndSecureStd 1 # Gulf of Oman
         #XP1_003 AdvanceAndSecureStd 1 # Sharqi Peninsula
         #XP1_004 AdvanceAndSecureStd 1 # Wake Island
-        #XP3_Desert AdvanceAndSecureStd 1 # Bandar Desert
+        #XP3_Desert AdvanceAndSecureStd 1 #  Bandar Desert
         #XP3_Shield AdvanceAndSecureStd 6 # Issue 226
         #XP4_Parl AdvanceAndSecureStd 1 # Azadi Palace
         #XP5_001 AdvanceAndSecureStd 1 # Operation Riverside
         XP5_002 AdvanceAndSecureStd 1 # Kandahar
         #XP5_003 AdvanceAndSecureStd 1 # Bay of Gdansk
         #XP5_004 AdvanceAndSecureStd 1 # Chernihivska Oblast Pipeline
+
+        #Skirmish Layers
+        #XP1_001 SkirmishStd 1 # Strike at Karkand
+        #XP1_002 SkirmishStd 1 # Gulf of Oman
+        #XP1_003 SkirmishStd 1 # Sharqi Peninsula
+        #XP1_004 SkirmishStd 1 # Wake Island
+        #XP3_Desert SkirmishStd 1 #  Bandar Desert
+        #XP3_Shield SkirmishStd 6 # Issue 226
+        #XP4_Parl SkirmishStd 1 # Azadi Palace
+        #XP5_001 SkirmishStd 1 # Operation Riverside
+        #XP5_002 SkirmishStd 1 # Kandahar
+        #XP5_003 SkirmishStd 1 # Bay of Gdansk
+        #XP5_004 SkirmishStd 1 # Chernihivska Oblast Pipeline
+
+
+        #Insurgency Layers
+        #XP1_001 InsurgencyStd 1 # Strike at Karkand
+        #XP1_002 InsurgencyStd 1 # Gulf of Oman
+        #XP1_003 InsurgencyStd 1 # Sharqi Peninsula
+        #XP3_Desert InsurgencyStd 1 # Bandar Desert
+        #XP4_Parl InsurgencyStd 1  # Azadi Palace
+        #XP5_002 InsurgencyStd 1
+
+        #XP3_Desert TrainingStd 1 # Bandar Desert
+
         "@
         Set-Content -Path "MapList.txt" -Value $mapListContent
 
@@ -180,7 +203,7 @@ jobs:
         vars.teamKillValueDecreasePerSecond 0.01
         vars.teamKillKickForBan 0
         RM.setDevelopers "names" "space" "seperated" 
-        RM.setAdmins "[ENTE]VileEnd" "Admin2"
+        RM.setAdmins "Admin2" "Admin2"
         RM.setLightAdmins "LightAdmin1" "LightAdmin2"
         RM.serverInfo "Sample RM Server Info"
         RM.serverLicenseKey $env:LIC_KEY
