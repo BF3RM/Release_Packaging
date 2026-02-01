@@ -1,0 +1,117 @@
+name: Bundle From Latest Releases
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  bundle-latest-releases:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+
+      - name: Create Directory Structure
+        run: |
+          New-Item -ItemType Directory -Force -Path "Build\Admin\Mods"
+          New-Item -ItemType Directory -Force -Path "tmp"
+
+      - name: Download Latest Releases
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          # VEManager (Source Code zip)
+          New-Item -ItemType Directory -Force -Path "tmp\VEManager"
+          gh release download -R BF3RM/VEManager --archive=zip -D "tmp\VEManager"
+
+          # BlueprintManager (Source Code zip)
+          New-Item -ItemType Directory -Force -Path "tmp\BlueprintManager"
+          gh release download -R BF3RM/BlueprintManager --archive=zip -D "tmp\BlueprintManager"
+
+          # RealityMod (release.zip)
+          New-Item -ItemType Directory -Force -Path "tmp\RealityMod"
+          gh release download -R BF3RM/RealityMod -p "release.zip" -D "tmp\RealityMod"
+
+          # RMLevelLoader (rm-levelloader.zip)
+          New-Item -ItemType Directory -Force -Path "tmp\RMLevelLoader"
+          gh release download -R BF3RM/RMLevelLoaderGen -p "rm-levelloader.zip" -D "tmp\RMLevelLoader"
+
+      - name: Extract And Assemble
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          function Expand-ZipToFolder {
+            param(
+              [string]$ZipPath,
+              [string]$Destination
+            )
+
+            $temp = Join-Path (Split-Path $ZipPath -Parent) ([IO.Path]::GetFileNameWithoutExtension($ZipPath) + "_unzipped")
+            Expand-Archive -Path $ZipPath -DestinationPath $temp -Force
+
+            $root = Get-ChildItem -Path $temp | Select-Object -First 1
+            if ($null -ne $root -and $root.PSIsContainer) {
+              Copy-Item -Path (Join-Path $root.FullName "*") -Destination $Destination -Recurse -Force
+            } else {
+              Copy-Item -Path (Join-Path $temp "*") -Destination $Destination -Recurse -Force
+            }
+
+            Remove-Item $temp -Recurse -Force
+          }
+
+          # VEManager
+          $veZip = Get-ChildItem -Path "tmp\VEManager" -Filter "*.zip" | Select-Object -First 1
+          if (-not $veZip) { Write-Error "VEManager source zip not found"; exit 1 }
+          New-Item -ItemType Directory -Force -Path "Build\Admin\Mods\VEManager"
+          Expand-ZipToFolder -ZipPath $veZip.FullName -Destination "Build\Admin\Mods\VEManager"
+
+          # BlueprintManager
+          $bpZip = Get-ChildItem -Path "tmp\BlueprintManager" -Filter "*.zip" | Select-Object -First 1
+          if (-not $bpZip) { Write-Error "BlueprintManager source zip not found"; exit 1 }
+          New-Item -ItemType Directory -Force -Path "Build\Admin\Mods\BlueprintManager"
+          Expand-ZipToFolder -ZipPath $bpZip.FullName -Destination "Build\Admin\Mods\BlueprintManager"
+
+          # RealityMod (release.zip)
+          $rmZip = Get-ChildItem -Path "tmp\RealityMod" -Filter "release.zip" | Select-Object -First 1
+          if (-not $rmZip) { Write-Error "RealityMod release.zip not found"; exit 1 }
+          New-Item -ItemType Directory -Force -Path "Build\Admin\Mods\RealityMod"
+          Expand-ZipToFolder -ZipPath $rmZip.FullName -Destination "Build\Admin\Mods\RealityMod"
+
+          # RMLevelLoader (rm-levelloader.zip)
+          $llZip = Get-ChildItem -Path "tmp\RMLevelLoader" -Filter "rm-levelloader.zip" | Select-Object -First 1
+          if (-not $llZip) { Write-Error "rm-levelloader.zip not found"; exit 1 }
+          New-Item -ItemType Directory -Force -Path "Build\Admin\Mods\rm-levelloader"
+          Expand-ZipToFolder -ZipPath $llZip.FullName -Destination "Build\Admin\Mods\rm-levelloader"
+
+      - name: Create Zip Packages
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          pushd Build
+          Compress-Archive -Path * -DestinationPath ..\Reality-Server-Full.zip -Force
+          popd
+
+          pushd Build\Admin\Mods
+          Compress-Archive -Path * -DestinationPath ..\..\..\Reality-Mods-Only.zip -Force
+          popd
+
+      - name: Set Release Tag
+        run: |
+          $tag = "latest-release-bundle-" + (Get-Date -Format "yyyyMMdd-HHmm")
+          echo "RELEASE_TAG=$tag" >> $env:GITHUB_ENV
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: Latest Release Bundle (${{ env.RELEASE_TAG }})
+          files: |
+            Reality-Server-Full.zip
+            Reality-Mods-Only.zip
+          body: |
+            Automated bundle from latest upstream releases.
