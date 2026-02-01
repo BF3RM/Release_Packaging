@@ -2,108 +2,120 @@ name: Bundle From Latest Releases
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * *"
 
 permissions:
   contents: write
 
 jobs:
   bundle-latest-releases:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout Repo
         uses: actions/checkout@v4
 
+      - name: Resolve Latest Release Tags
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+
+          veTag=$(gh release view -R BF3RM/VEManager --json tagName -q ".tagName")
+          bpTag=$(gh release view -R BF3RM/BlueprintManager --json tagName -q ".tagName")
+          rmTag=$(gh release view -R BF3RM/RealityMod --json tagName -q ".tagName")
+          llTag=$(gh release view -R BF3RM/RMLevelLoaderGen --json tagName -q ".tagName")
+
+          combo="$veTag|$bpTag|$rmTag|$llTag"
+          sha=$(printf "%s" "$combo" | sha256sum | cut -d" " -f1)
+          tag="latest-release-bundle-${sha:0:12}"
+
+          echo "UPSTREAM_VE_TAG=$veTag" >> "$GITHUB_ENV"
+          echo "UPSTREAM_BP_TAG=$bpTag" >> "$GITHUB_ENV"
+          echo "UPSTREAM_RM_TAG=$rmTag" >> "$GITHUB_ENV"
+          echo "UPSTREAM_LL_TAG=$llTag" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=$tag" >> "$GITHUB_ENV"
+
+      - name: Skip If Bundle Already Exists
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" -R ${{ github.repository }} >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists. Skipping."
+            exit 0
+          fi
+
       - name: Create Directory Structure
         run: |
-          New-Item -ItemType Directory -Force -Path "Build\Admin\Mods"
-          New-Item -ItemType Directory -Force -Path "tmp"
+          set -euo pipefail
+          mkdir -p Build/Admin/Mods tmp
 
       - name: Download Latest Releases
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
-          $ErrorActionPreference = "Stop"
+          set -euo pipefail
 
-          # VEManager (Source Code zip)
-          New-Item -ItemType Directory -Force -Path "tmp\VEManager"
-          gh release download -R BF3RM/VEManager --archive=zip -D "tmp\VEManager"
+          mkdir -p tmp/VEManager tmp/BlueprintManager tmp/RealityMod tmp/RMLevelLoader
 
-          # BlueprintManager (Source Code zip)
-          New-Item -ItemType Directory -Force -Path "tmp\BlueprintManager"
-          gh release download -R BF3RM/BlueprintManager --archive=zip -D "tmp\BlueprintManager"
-
-          # RealityMod (release.zip)
-          New-Item -ItemType Directory -Force -Path "tmp\RealityMod"
-          gh release download -R BF3RM/RealityMod -p "release.zip" -D "tmp\RealityMod"
-
-          # RMLevelLoader (rm-levelloader.zip)
-          New-Item -ItemType Directory -Force -Path "tmp\RMLevelLoader"
-          gh release download -R BF3RM/RMLevelLoaderGen -p "rm-levelloader.zip" -D "tmp\RMLevelLoader"
+          gh release download -R BF3RM/VEManager --archive=zip -D tmp/VEManager
+          gh release download -R BF3RM/BlueprintManager --archive=zip -D tmp/BlueprintManager
+          gh release download -R BF3RM/RealityMod -p "release.zip" -D tmp/RealityMod
+          gh release download -R BF3RM/RMLevelLoaderGen -p "rm-levelloader.zip" -D tmp/RMLevelLoader
 
       - name: Extract And Assemble
         run: |
-          $ErrorActionPreference = "Stop"
+          set -euo pipefail
 
-          function Expand-ZipToFolder {
-            param(
-              [string]$ZipPath,
-              [string]$Destination
-            )
+          expand_zip_flatten() {
+            local zip_path="$1"
+            local dest="$2"
 
-            $temp = Join-Path (Split-Path $ZipPath -Parent) ([IO.Path]::GetFileNameWithoutExtension($ZipPath) + "_unzipped")
-            Expand-Archive -Path $ZipPath -DestinationPath $temp -Force
+            rm -rf "$dest"
+            mkdir -p "$dest"
+            unzip -q "$zip_path" -d "$dest"
 
-            $root = Get-ChildItem -Path $temp | Select-Object -First 1
-            if ($null -ne $root -and $root.PSIsContainer) {
-              Copy-Item -Path (Join-Path $root.FullName "*") -Destination $Destination -Recurse -Force
-            } else {
-              Copy-Item -Path (Join-Path $temp "*") -Destination $Destination -Recurse -Force
-            }
-
-            Remove-Item $temp -Recurse -Force
+            local count
+            count=$(find "$dest" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')
+            if [ "$count" -eq 1 ] && [ -d "$(find "$dest" -mindepth 1 -maxdepth 1)" ]; then
+              local inner
+              inner=$(find "$dest" -mindepth 1 -maxdepth 1 -type d)
+              shopt -s dotglob
+              mv "$inner"/* "$dest"/
+              shopt -u dotglob
+              rm -rf "$inner"
+            fi
           }
 
-          # VEManager
-          $veZip = Get-ChildItem -Path "tmp\VEManager" -Filter "*.zip" | Select-Object -First 1
-          if (-not $veZip) { Write-Error "VEManager source zip not found"; exit 1 }
-          New-Item -ItemType Directory -Force -Path "Build\Admin\Mods\VEManager"
-          Expand-ZipToFolder -ZipPath $veZip.FullName -Destination "Build\Admin\Mods\VEManager"
+          veZip=$(ls tmp/VEManager/*.zip 2>/dev/null | head -n 1)
+          [ -n "$veZip" ] || { echo "VEManager source zip not found"; exit 1; }
+          expand_zip_flatten "$veZip" "Build/Admin/Mods/VEManager"
 
-          # BlueprintManager
-          $bpZip = Get-ChildItem -Path "tmp\BlueprintManager" -Filter "*.zip" | Select-Object -First 1
-          if (-not $bpZip) { Write-Error "BlueprintManager source zip not found"; exit 1 }
-          New-Item -ItemType Directory -Force -Path "Build\Admin\Mods\BlueprintManager"
-          Expand-ZipToFolder -ZipPath $bpZip.FullName -Destination "Build\Admin\Mods\BlueprintManager"
+          bpZip=$(ls tmp/BlueprintManager/*.zip 2>/dev/null | head -n 1)
+          [ -n "$bpZip" ] || { echo "BlueprintManager source zip not found"; exit 1; }
+          expand_zip_flatten "$bpZip" "Build/Admin/Mods/BlueprintManager"
 
-          # RealityMod (release.zip)
-          $rmZip = Get-ChildItem -Path "tmp\RealityMod" -Filter "release.zip" | Select-Object -First 1
-          if (-not $rmZip) { Write-Error "RealityMod release.zip not found"; exit 1 }
-          New-Item -ItemType Directory -Force -Path "Build\Admin\Mods\RealityMod"
-          Expand-ZipToFolder -ZipPath $rmZip.FullName -Destination "Build\Admin\Mods\RealityMod"
+          rmZip="tmp/RealityMod/release.zip"
+          [ -f "$rmZip" ] || { echo "RealityMod release.zip not found"; exit 1; }
+          expand_zip_flatten "$rmZip" "Build/Admin/Mods/RealityMod"
 
-          # RMLevelLoader (rm-levelloader.zip)
-          $llZip = Get-ChildItem -Path "tmp\RMLevelLoader" -Filter "rm-levelloader.zip" | Select-Object -First 1
-          if (-not $llZip) { Write-Error "rm-levelloader.zip not found"; exit 1 }
-          New-Item -ItemType Directory -Force -Path "Build\Admin\Mods\rm-levelloader"
-          Expand-ZipToFolder -ZipPath $llZip.FullName -Destination "Build\Admin\Mods\rm-levelloader"
+          llZip="tmp/RMLevelLoader/rm-levelloader.zip"
+          [ -f "$llZip" ] || { echo "rm-levelloader.zip not found"; exit 1; }
+          expand_zip_flatten "$llZip" "Build/Admin/Mods/rm-levelloader"
 
       - name: Create Zip Packages
         run: |
-          $ErrorActionPreference = "Stop"
+          set -euo pipefail
 
           pushd Build
-          Compress-Archive -Path * -DestinationPath ..\Reality-Server-Full.zip -Force
+          zip -r ../Reality-Server-Full.zip .
           popd
 
-          pushd Build\Admin\Mods
-          Compress-Archive -Path * -DestinationPath ..\..\..\Reality-Mods-Only.zip -Force
+          pushd Build/Admin/Mods
+          zip -r ../../../Reality-Mods-Only.zip .
           popd
-
-      - name: Set Release Tag
-        run: |
-          $tag = "latest-release-bundle-" + (Get-Date -Format "yyyyMMdd-HHmm")
-          echo "RELEASE_TAG=$tag" >> $env:GITHUB_ENV
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
@@ -115,3 +127,39 @@ jobs:
             Reality-Mods-Only.zip
           body: |
             Automated bundle from latest upstream releases.
+
+            Upstream tags:
+            - VEManager: ${{ env.UPSTREAM_VE_TAG }}
+            - BlueprintManager: ${{ env.UPSTREAM_BP_TAG }}
+            - RealityMod: ${{ env.UPSTREAM_RM_TAG }}
+            - RMLevelLoader: ${{ env.UPSTREAM_LL_TAG }}
+
+      - name: Publish 'release' Tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          cat > release_notes.md <<'EOF'
+          Automated bundle from latest upstream releases.
+
+          Upstream tags:
+          - VEManager: ${UPSTREAM_VE_TAG}
+          - BlueprintManager: ${UPSTREAM_BP_TAG}
+          - RealityMod: ${UPSTREAM_RM_TAG}
+          - RMLevelLoader: ${UPSTREAM_LL_TAG}
+          EOF
+
+          envsubst < release_notes.md > release_notes_rendered.md
+
+          gh release delete release --yes || echo "No previous release found"
+
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git tag -f release
+          git push -f origin release
+
+          gh release create release \
+            --title "Release Bundle (${RELEASE_TAG})" \
+            --notes-file release_notes_rendered.md \
+            Reality-Server-Full.zip Reality-Mods-Only.zip
