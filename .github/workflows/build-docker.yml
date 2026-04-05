@@ -29,6 +29,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Extract metadata (tags & labels)
         id: meta
         uses: docker/metadata-action@v5
@@ -39,13 +42,33 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
 
+      - name: Download mods zip into build context
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download release -R ${{ github.repository }} \
+            -p "Reality-Mods-Only.zip" --clobber
+
+      - name: Check if this zip was already built
+        id: build-cache
+        uses: actions/cache@v4
+        with:
+          path: .build-hash
+          key: docker-mods-${{ hashFiles('Reality-Mods-Only.zip') }}
+
       - name: Build and push Docker image
+        if: steps.build-cache.outputs.cache-hit != 'true'
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # Cache layers between builds to speed things up
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
+          cache-from: |
+            type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
+            type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
+
+      - name: Mark zip hash as built
+        if: steps.build-cache.outputs.cache-hit != 'true'
+        run: touch .build-hash
