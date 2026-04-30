@@ -72,3 +72,20 @@ jobs:
       - name: Mark zip hash as built
         if: steps.build-cache.outputs.cache-hit != 'true'
         run: touch .build-hash
+
+      - name: Restart Pelican server
+        if: steps.build-cache.outputs.cache-hit != 'true'
+        env:
+          PELICAN_KEY: ${{ secrets.PELICAN_CLIENT_KEY }}
+          PELICAN_URL: ${{ secrets.PELICAN_URL }}
+          SERVER_ID: e198ab8d
+        run: |
+          if [ -z "$PELICAN_KEY" ] || [ -z "$PELICAN_URL" ]; then
+            echo "PELICAN_CLIENT_KEY or PELICAN_URL secret not set; skipping restart."
+            exit 0
+          fi
+          curl -fsS -X POST "$PELICAN_URL/api/client/servers/$SERVER_ID/power" \
+            -H "Authorization: Bearer $PELICAN_KEY" \
+            -H "Content-Type: application/json" \
+            -H "Accept: application/json" \
+            -d '{"signal":"restart"}'
